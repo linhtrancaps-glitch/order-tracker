@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Customer Order Tracker</title>
+<style>
+:root{--bg:#f4f6fa;--card:#fff;--text:#1d2433;--muted:#6b7385;--line:#dfe3ec;--pri:#1f4e9c;--pri-t:#fff;--red:#c62828;--amber:#b26a00;--green:#1b7a3d;--blue:#1f4e9c;--grey:#6b7385}
+@media (prefers-color-scheme:dark){:root{--bg:#12161f;--card:#1b212d;--text:#e8ecf4;--muted:#9aa4b8;--line:#2c3446;--pri:#5b8fe0;--pri-t:#0b1220;--red:#ef6a6a;--amber:#e0a040;--green:#4cc77a;--blue:#6aa0ee}}
+*{box-sizing:border-box}
+body{margin:0;font-family:Calibri,Segoe UI,Arial,sans-serif;background:var(--bg);color:var(--text);font-size:14px}
+header{padding:16px 20px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between}
+h1{font-size:20px;margin:0}
+.btn{border:1px solid var(--line);background:var(--card);color:var(--text);padding:8px 12px;border-radius:8px;cursor:pointer;font-size:13px}
+.btn.pri{background:var(--pri);color:var(--pri-t);border-color:var(--pri)}
+.btn.del{color:var(--red)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;padding:0 20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px}
+.card .n{font-size:22px;font-weight:700}.card .l{color:var(--muted);font-size:12px}
+.card.warn .n{color:var(--red)}
+.filters{display:flex;flex-wrap:wrap;gap:8px;padding:14px 20px}
+.filters input,.filters select,dialog input,dialog select,dialog textarea{padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--text);font-size:13px;font-family:inherit}
+.wrap{padding:0 20px 30px;overflow-x:auto;max-width:100%}
+table{border-collapse:collapse;width:100%;background:var(--card);border:1px solid var(--line);border-radius:10px;min-width:1200px}
+th,td{padding:9px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;white-space:nowrap}
+th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;cursor:pointer;user-select:none}
+td.num{text-align:right}
+.badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;border:1px solid currentColor}
+.b-red{color:var(--red)}.b-amber{color:var(--amber)}.b-green{color:var(--green)}.b-blue{color:var(--blue)}.b-grey{color:var(--grey)}
+.late{color:var(--red);font-weight:700}
+.empty{padding:30px;text-align:center;color:var(--muted)}
+dialog{border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--text);width:min(640px,94vw);padding:18px}
+dialog::backdrop{background:rgba(0,0,0,.45)}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.grid label{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--muted)}
+.grid .full{grid-column:1/-1}
+.grid input,.grid select,.grid textarea{width:100%}
+.actions{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+.note{padding:0 20px 14px;color:var(--muted);font-size:12px}
+@media (max-width:560px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Customer Order Tracker</h1>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <button class="btn pri" id="addBtn">+ New PO</button>
+    <button class="btn" id="csvBtn">Export Excel (CSV)</button>
+    <button class="btn" id="impBtn">Import CSV</button>
+    <button class="btn" id="bakBtn">Backup (JSON)</button>
+    <input type="file" id="file" accept=".csv,.json" hidden>
+  </div>
+</header>
+
+<div class="cards" id="cards"></div>
+
+<div class="filters">
+  <input id="q" placeholder="Search customer, PO, plan, notes…" style="min-width:230px;flex:1">
+  <select id="fCust"></select>
+  <select id="fDel"></select>
+  <select id="fPay"></select>
+  <select id="fFlag">
+    <option value="">All</option>
+    <option value="lateDel">Late delivery</option>
+    <option value="latePay">Late payment</option>
+    <option value="soon">Payment due ≤ 7 days</option>
+  </select>
+</div>
+
+<div class="wrap"><table>
+  <thead><tr id="thead"></tr></thead>
+  <tbody id="tbody"></tbody>
+</table><div id="empty" class="empty" hidden>No records match.</div></div>
+
+<div class="note">Data is saved in this browser only (not uploaded anywhere). Use Backup or Export regularly, and Import to load it on another device.</div>
+
+<dialog id="dlg">
+  <h2 id="dlgTitle" style="margin:0 0 12px;font-size:17px">PO</h2>
+  <div class="grid" id="formGrid"></div>
+  <p style="font-size:12px;color:var(--muted);margin:10px 0 0">Payment Due = Invoice Date + Terms (days). You can also type the due date directly and the days are recalculated.</p>
+  <div class="actions">
+    <button class="btn del" id="delBtn" hidden>Delete</button>
+    <button class="btn" id="cancelBtn">Cancel</button>
+    <button class="btn pri" id="saveBtn">Save</button>
+  </div>
+</dialog>
+
+<script>
+const DELIVERY = ["Planned","PO Received","Ordered","In Transit","Delivered"];
+const PAYMENT  = ["Not invoiced","Invoiced","Partial","Paid"];
+const CURR = ["VND","USD","EUR"];
+const FIELDS = [
+  ["customer","Customer","text"],["po","PO No.","text"],["plan","Plan / Project","text"],["poDate","PO Date","date"],
+  ["desc","Goods / Description","area"],
+  ["value","PO Value","number"],["currency","Currency","cur"],
+  ["eta","Delivery ETA","date"],["delivery","Delivery Status","del"],
+  ["invoiceDate","Invoice Date","date"],["termDays","Payment Terms (days)","number"],
+  ["dueDate","Payment Due (auto)","date"],["payment","Payment Status","pay"],
+  ["paid","Amount Paid","number"],["paidDate","Actual Payment Date","date"],
+  ["notes","Notes","area"]
+];
+const KEY = "orderTracker.v1";
+let rows = [], sortKey = "dueDate", sortDir = 1, editingId = null;
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const pad = n => String(n).padStart(2,"0");
+const ymd = d => d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate());
+const today = () => ymd(new Date());
+const addDays = n => { const d = new Date(); d.setDate(d.getDate()+n); return ymd(d); };
+function toDate(str){ const [y,m,d] = str.split("-").map(Number); return new Date(y,m-1,d); }
+function addToDate(str,n){ const d = toDate(str); d.setDate(d.getDate()+Number(n)); return ymd(d); }
+function diffDays(a,b){ return Math.round((toDate(b)-toDate(a))/864e5); }
+function normalise(r){
+  if (r.termDays===undefined){ const m = String(r.payTerms||"").match(/net\s*(\d+)|(\d+)\s*days?/i); r.termDays = m ? Number(m[1]||m[2]) : 0; }
+  if (r.invoiceDate===undefined) r.invoiceDate = "";
+  if (r.paidDate===undefined) r.paidDate = "";
+  if (!r.dueDate && r.invoiceDate && r.termDays) r.dueDate = addToDate(r.invoiceDate,r.termDays);
+  return r;
+}
+const fmt = (n,c) => (Number(n)||0).toLocaleString("en-US",{maximumFractionDigits:2}) + (c?" "+c:"");
+
+function load(){
+  try { const s = localStorage.getItem(KEY); if (s) { rows = JSON.parse(s).map(normalise); return; } } catch(e){}
+  rows = [
+    {id:uid(),customer:"Customer A",po:"PO-2026-001",plan:"Spare parts Q4",poDate:addDays(-20),desc:"Hydraulic hoses, filters",value:12500,currency:"USD",eta:addDays(-2),delivery:"In Transit",invoiceDate:addDays(-20),termDays:30,dueDate:addDays(10),paidDate:"",payment:"Invoiced",paid:0,notes:"Customs clearance pending"},
+    {id:uid(),customer:"Customer B",po:"PO-2026-002",plan:"Annual maintenance",poDate:addDays(-45),desc:"Service kit",value:480000000,currency:"VND",eta:addDays(-25),delivery:"Delivered",invoiceDate:addDays(-33),termDays:30,dueDate:addDays(-3),paidDate:"",payment:"Partial",paid:200000000,notes:"Chase remaining balance"},
+    {id:uid(),customer:"Customer A",po:"PO-2026-003",plan:"Project Phase 2",poDate:addDays(-3),desc:"Cable & accessories",value:8300,currency:"USD",eta:addDays(21),delivery:"Ordered",invoiceDate:"",termDays:30,dueDate:"",paidDate:"",payment:"Not invoiced",paid:0,notes:""}
+  ];
+}
+function save(){ try { localStorage.setItem(KEY, JSON.stringify(rows)); } catch(e){} }
+function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
+
+function paidAmt(r){ return r.payment==="Paid" ? (Number(r.value)||0) : (Number(r.paid)||0); }
+function outstanding(r){ return Math.max(0,(Number(r.value)||0)-paidAmt(r)); }
+function lateDel(r){ return r.eta && r.eta < today() && r.delivery !== "Delivered"; }
+function latePay(r){ return r.dueDate && r.dueDate < today() && r.payment !== "Paid"; }
+function soonPay(r){ return r.dueDate && r.dueDate >= today() && r.dueDate <= addDays(7) && r.payment !== "Paid"; }
+
+function dueNote(r){
+  if (!r.dueDate) return "";
+  if (r.payment==="Paid"){
+    if (!r.paidDate) return "";
+    const d = diffDays(r.dueDate,r.paidDate);
+    return `<br><small>Paid ${esc(r.paidDate)}${d>0?" ("+d+"d late)":d<0?" ("+(-d)+"d early)":" (on time)"}</small>`;
+  }
+  const d = diffDays(today(),r.dueDate);
+  if (d<0) return `<br><small>overdue ${-d} day${-d>1?"s":""}</small>`;
+  if (d===0) return `<br><small>due today</small>`;
+  return `<br><small>${d} day${d>1?"s":""} left</small>`;
+}
+function badge(txt, cls){ return `<span class="badge ${cls}">${esc(txt)}</span>`; }
+function delBadge(s){ return badge(s, s==="Delivered"?"b-green":s==="In Transit"?"b-blue":s==="Planned"?"b-grey":"b-amber"); }
+function payBadge(s){ return badge(s, s==="Paid"?"b-green":s==="Partial"?"b-amber":s==="Invoiced"?"b-blue":"b-grey"); }
+
+function fillSelect(el, first, list){ el.innerHTML = `<option value="">${first}</option>` + list.map(x=>`<option>${esc(x)}</option>`).join(""); }
+function refreshFilters(){
+  const cur = $("fCust").value;
+  const custs = [...new Set(rows.map(r=>r.customer).filter(Boolean))].sort();
+  fillSelect($("fCust"),"All customers",custs); $("fCust").value = custs.includes(cur)?cur:"";
+}
+
+const COLS = [
+  ["customer","Customer"],["po","PO No."],["plan","Plan"],["value","PO Value"],["eta","Delivery ETA"],
+  ["delivery","Delivery"],["invoiceDate","Invoice Date"],["termDays","Terms"],["dueDate","Payment Due"],["payment","Payment"],["out","Outstanding"]
+];
+
+function filtered(){
+  const q = $("q").value.trim().toLowerCase(), c = $("fCust").value, d = $("fDel").value, p = $("fPay").value, f = $("fFlag").value;
+  return rows.filter(r=>{
+    if (c && r.customer!==c) return false;
+    if (d && r.delivery!==d) return false;
+    if (p && r.payment!==p) return false;
+    if (f==="lateDel" && !lateDel(r)) return false;
+    if (f==="latePay" && !latePay(r)) return false;
+    if (f==="soon" && !soonPay(r)) return false;
+    if (q && ![r.customer,r.po,r.plan,r.desc,r.notes].join(" ").toLowerCase().includes(q)) return false;
+    return true;
+  });
+}
+
+function render(){
+  refreshFilters();
+  // summary (on all rows)
+  const open = rows.filter(r=>r.payment!=="Paid"||r.delivery!=="Delivered");
+  const cur = {};
+  rows.forEach(r=>{ const o = outstanding(r); if (o>0) cur[r.currency] = (cur[r.currency]||0)+o; });
+  const outTxt = Object.keys(cur).map(k=>fmt(cur[k],k)).join("<br>") || "0";
+  $("cards").innerHTML = `
+    <div class="card"><div class="n">${rows.length}</div><div class="l">Total POs</div></div>
+    <div class="card"><div class="n">${open.length}</div><div class="l">Open (not delivered or not paid)</div></div>
+    <div class="card ${rows.filter(lateDel).length?"warn":""}"><div class="n">${rows.filter(lateDel).length}</div><div class="l">Late deliveries</div></div>
+    <div class="card ${rows.filter(latePay).length?"warn":""}"><div class="n">${rows.filter(latePay).length}</div><div class="l">Late payments</div></div>
+    <div class="card"><div class="n">${rows.filter(soonPay).length}</div><div class="l">Payment due ≤ 7 days</div></div>
+    <div class="card"><div class="n" style="font-size:15px">${outTxt}</div><div class="l">Outstanding</div></div>`;
+
+  $("thead").innerHTML = COLS.map(([k,l])=>`<th data-k="${k}">${l}${sortKey===k?(sortDir>0?" ▲":" ▼"):""}</th>`).join("");
+  const list = filtered().slice().sort((a,b)=>{
+    const va = sortKey==="out"?outstanding(a):(a[sortKey]??""), vb = sortKey==="out"?outstanding(b):(b[sortKey]??"");
+    if (va===vb) return 0;
+    if (va==="") return 1; if (vb==="") return -1;
+    return (va>vb?1:-1)*sortDir;
+  });
+  $("tbody").innerHTML = list.map(r=>`
+    <tr data-id="${r.id}" style="cursor:pointer">
+      <td>${esc(r.customer)}</td><td><b>${esc(r.po)}</b></td><td>${esc(r.plan)}</td>
+      <td class="num">${fmt(r.value,r.currency)}</td>
+      <td class="${lateDel(r)?"late":""}">${esc(r.eta)||"–"}${lateDel(r)?" (late)":""}</td>
+      <td>${delBadge(r.delivery)}</td>
+      <td>${esc(r.invoiceDate)||"–"}</td>
+      <td>${r.termDays?esc(r.termDays)+" days":"–"}</td>
+      <td class="${latePay(r)?"late":""}">${esc(r.dueDate)||"–"}${dueNote(r)}</td>
+      <td>${payBadge(r.payment)}</td>
+      <td class="num">${fmt(outstanding(r),r.currency)}</td>
+    </tr>`).join("");
+  $("empty").hidden = list.length>0;
+}
+
+// ---- form ----
+function buildForm(){
+  $("formGrid").innerHTML = FIELDS.map(([k,l,t])=>{
+    let inp;
+    if (t==="area") inp = `<textarea id="f_${k}" rows="2"></textarea>`;
+    else if (t==="del") inp = `<select id="f_${k}">${DELIVERY.map(x=>`<option>${x}</option>`).join("")}</select>`;
+    else if (t==="pay") inp = `<select id="f_${k}">${PAYMENT.map(x=>`<option>${x}</option>`).join("")}</select>`;
+    else if (t==="cur") inp = `<select id="f_${k}">${CURR.map(x=>`<option>${x}</option>`).join("")}</select>`;
+    else inp = `<input id="f_${k}" type="${t}" ${t==="number"?'step="any" min="0"':""}>`;
+    return `<label class="${t==="area"?"full":""}">${l}${inp}</label>`;
+  }).join("");
+}
+function openForm(id){
+  editingId = id;
+  const r = rows.find(x=>x.id===id) || {currency:"USD",delivery:"Planned",payment:"Not invoiced",poDate:today(),paid:0,value:0};
+  FIELDS.forEach(([k])=>{ $("f_"+k).value = r[k] ?? ""; });
+  $("dlgTitle").textContent = id ? "Edit PO" : "New PO";
+  $("delBtn").hidden = !id;
+  $("dlg").showModal();
+}
+function saveForm(){
+  const o = {};
+  FIELDS.forEach(([k,,t])=>{ const v = $("f_"+k).value; o[k] = t==="number" ? (Number(v)||0) : v.trim ? v.trim() : v; });
+  if (!o.customer || !o.po){ alert("Customer and PO No. are required."); return; }
+  if (!o.dueDate && o.invoiceDate && o.termDays) o.dueDate = addToDate(o.invoiceDate,o.termDays);
+  if (editingId){ const i = rows.findIndex(x=>x.id===editingId); rows[i] = {...rows[i],...o}; }
+  else rows.push({id:uid(),...o});
+  save(); $("dlg").close(); render();
+}
+
+// ---- export / import ----
+function csvCell(v){ v = String(v ?? ""); return /[",\n\r]/.test(v) ? '"'+v.replace(/"/g,'""')+'"' : v; }
+function download(name, text, type){
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text],{type}));
+  a.download = name; document.body.appendChild(a); a.click(); a.remove();
+}
+function exportCSV(){
+  const head = FIELDS.map(f=>f[1]).concat(["Outstanding"]);
+  const lines = [head.map(csvCell).join(",")].concat(rows.map(r=>FIELDS.map(([k])=>csvCell(r[k])).concat([outstanding(r)]).join(",")));
+  download("orders-"+today()+".csv","\ufeff"+lines.join("\r\n"),"text/csv;charset=utf-8");
+}
+function parseCSV(text){
+  const out=[]; let row=[], cell="", q=false;
+  text = text.replace(/^\ufeff/,"");
+  for (let i=0;i<text.length;i++){
+    const c=text[i];
+    if (q){ if (c==='"'){ if (text[i+1]==='"'){cell+='"';i++;} else q=false; } else cell+=c; }
+    else if (c==='"') q=true;
+    else if (c===","){ row.push(cell); cell=""; }
+    else if (c==="\n"||c==="\r"){ if (c==="\r"&&text[i+1]==="\n") i++; row.push(cell); cell=""; if (row.some(x=>x!=="")) out.push(row); row=[]; }
+    else cell+=c;
+  }
+  row.push(cell); if (row.some(x=>x!=="")) out.push(row);
+  return out;
+}
+function importFile(f){
+  const rd = new FileReader();
+  rd.onload = () => {
+    try{
+      let imported;
+      if (f.name.toLowerCase().endsWith(".json")) imported = JSON.parse(rd.result);
+      else {
+        const t = parseCSV(rd.result), head = t[0].map(h=>h.trim());
+        imported = t.slice(1).map(cells=>{
+          const o = {id:uid()};
+          FIELDS.forEach(([k,l,ty])=>{ const i = head.indexOf(l); const v = i>=0 ? (cells[i]??"") : ""; o[k] = ty==="number" ? (Number(v)||0) : v; });
+          return o;
+        });
+      }
+      if (!Array.isArray(imported)) throw 0;
+      if (!confirm("Import "+imported.length+" records and REPLACE current data?")) return;
+      rows = imported.map(r=>normalise({id:r.id||uid(),...r})); save(); render();
+    } catch(e){ alert("Could not read this file."); }
+  };
+  rd.readAsText(f);
+}
+
+// ---- events ----
+fillSelect($("fDel"),"All delivery status",DELIVERY);
+fillSelect($("fPay"),"All payment status",PAYMENT);
+buildForm(); load(); render();
+function recalcDue(){
+  const inv = $("f_invoiceDate").value, t = $("f_termDays").value;
+  if (inv && t!=="") $("f_dueDate").value = addToDate(inv,t);
+}
+$("f_invoiceDate").addEventListener("input",recalcDue);
+$("f_termDays").addEventListener("input",recalcDue);
+$("f_dueDate").addEventListener("input",()=>{
+  const inv = $("f_invoiceDate").value, due = $("f_dueDate").value;
+  if (inv && due) $("f_termDays").value = diffDays(inv,due);
+});
+$("f_payment").addEventListener("input",()=>{
+  if ($("f_payment").value==="Paid" && !$("f_paidDate").value) $("f_paidDate").value = today();
+});
+["q","fCust","fDel","fPay","fFlag"].forEach(id=>$(id).addEventListener("input",render));
+$("addBtn").onclick = ()=>openForm(null);
+$("cancelBtn").onclick = ()=>$("dlg").close();
+$("saveBtn").onclick = saveForm;
+$("delBtn").onclick = ()=>{ if (confirm("Delete this PO?")){ rows = rows.filter(r=>r.id!==editingId); save(); $("dlg").close(); render(); } };
+$("tbody").onclick = e=>{ const tr = e.target.closest("tr"); if (tr) openForm(tr.dataset.id); };
+$("thead").onclick = e=>{ const th = e.target.closest("th"); if (!th) return; const k = th.dataset.k; sortDir = sortKey===k ? -sortDir : 1; sortKey = k; render(); };
+$("csvBtn").onclick = exportCSV;
+$("bakBtn").onclick = ()=>download("orders-backup-"+today()+".json",JSON.stringify(rows,null,2),"application/json");
+$("impBtn").onclick = ()=>$("file").click();
+$("file").onchange = e=>{ if (e.target.files[0]) importFile(e.target.files[0]); e.target.value=""; };
+</script>
+</body>
+</html>
